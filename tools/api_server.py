@@ -47,7 +47,6 @@ class API(ExceptionHandler):
         self.routes = Routes(
             routes,  # keep existing routes
             http_middlewares=[api_auth],  # apply api_auth middleware
-            ws_middlewares=[api_auth],  # apply api_auth to WebSocket
         )
 
         # OpenAPIの設定
