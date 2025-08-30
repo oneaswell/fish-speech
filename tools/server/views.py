@@ -14,6 +14,7 @@ from kui.asgi import (
     JSONResponse,
     Routes,
     StreamResponse,
+    WebSocket,
     request,
 )
 from loguru import logger
@@ -33,10 +34,7 @@ from tools.server.api_utils import (
 )
 from tools.server.inference import inference_wrapper as inference
 from tools.server.model_manager import ModelManager
-from tools.server.model_utils import (
-    batch_vqgan_decode,
-    cached_vqgan_batch_encode,
-)
+from tools.server.model_utils import batch_vqgan_decode, cached_vqgan_batch_encode
 
 MAX_NUM_SAMPLES = int(os.getenv("NUM_SAMPLES", 1))
 
@@ -140,3 +138,34 @@ async def tts(req: Annotated[ServeTTSRequest, Body(exclusive=True)]):
             },
             content_type=get_content_type(req.format),
         )
+
+
+@routes.ws("/v1/tts/ws")
+async def tts_ws(ws: WebSocket):
+    await ws.accept()
+    try:
+        data = await ws.receive_text()
+        req = ServeTTSRequest.model_validate_json(data)
+        req.streaming = True
+
+        app_state = request.app.state
+        model_manager: ModelManager = app_state.model_manager
+        engine = model_manager.tts_inference_engine
+
+        if app_state.max_text_length > 0 and len(req.text) > app_state.max_text_length:
+            await ws.close(
+                code=1008,
+                reason=f"Text is too long, max length is {app_state.max_text_length}",
+            )
+            return
+
+        if req.format != "wav":
+            await ws.close(code=1003, reason="Streaming only supports WAV format")
+            return
+
+        async for chunk in inference_async(req, engine):
+            await ws.send_bytes(chunk)
+    except Exception as e:
+        logger.warning(f"WebSocket error: {e}")
+    finally:
+        await ws.close()

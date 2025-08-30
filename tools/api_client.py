@@ -1,10 +1,12 @@
 import argparse
+import asyncio
 import base64
 import wave
 
 import ormsgpack
 import pyaudio
 import requests
+import websockets
 from pydub import AudioSegment
 from pydub.playback import play
 
@@ -101,6 +103,12 @@ def parse_args():
         "--streaming", type=bool, default=False, help="Enable streaming response"
     )
     parser.add_argument(
+        "--websocket",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="Use WebSocket API (URL should be ws://)",
+    )
+    parser.add_argument(
         "--channels", type=int, default=1, help="Number of audio channels"
     )
     parser.add_argument("--rate", type=int, default=44100, help="Sample rate for audio")
@@ -171,55 +179,87 @@ if __name__ == "__main__":
     }
 
     pydantic_data = ServeTTSRequest(**data)
+    if args.websocket:
 
-    response = requests.post(
-        args.url,
-        data=ormsgpack.packb(pydantic_data, option=ormsgpack.OPT_SERIALIZE_PYDANTIC),
-        stream=args.streaming,
-        headers={
-            "authorization": f"Bearer {args.api_key}",
-            "content-type": "application/msgpack",
-        },
-    )
-
-    if response.status_code == 200:
-        if args.streaming:
+        async def ws_main():
             p = pyaudio.PyAudio()
-            audio_format = pyaudio.paInt16  # Assuming 16-bit PCM format
+            audio_format = pyaudio.paInt16
             stream = p.open(
                 format=audio_format, channels=args.channels, rate=args.rate, output=True
             )
-
             wf = wave.open(f"{args.output}.wav", "wb")
             wf.setnchannels(args.channels)
             wf.setsampwidth(p.get_sample_size(audio_format))
             wf.setframerate(args.rate)
-
-            stream_stopped_flag = False
-
-            try:
-                for chunk in response.iter_content(chunk_size=1024):
-                    if chunk:
+            async with websockets.connect(
+                args.url,
+                extra_headers={"authorization": f"Bearer {args.api_key}"},
+            ) as ws:
+                await ws.send(pydantic_data.model_dump_json())
+                try:
+                    async for chunk in ws:
                         stream.write(chunk)
                         wf.writeframesraw(chunk)
-                    else:
-                        if not stream_stopped_flag:
-                            stream.stop_stream()
-                            stream_stopped_flag = True
-            finally:
-                stream.close()
-                p.terminate()
-                wf.close()
-        else:
-            audio_content = response.content
-            audio_path = f"{args.output}.{args.format}"
-            with open(audio_path, "wb") as audio_file:
-                audio_file.write(audio_content)
+                finally:
+                    stream.close()
+                    p.terminate()
+                    wf.close()
 
-            audio = AudioSegment.from_file(audio_path, format=args.format)
-            if args.play:
-                play(audio)
-            print(f"Audio has been saved to '{audio_path}'.")
+        asyncio.run(ws_main())
     else:
-        print(f"Request failed with status code {response.status_code}")
-        print(response.json())
+        response = requests.post(
+            args.url,
+            data=ormsgpack.packb(
+                pydantic_data, option=ormsgpack.OPT_SERIALIZE_PYDANTIC
+            ),
+            stream=args.streaming,
+            headers={
+                "authorization": f"Bearer {args.api_key}",
+                "content-type": "application/msgpack",
+            },
+        )
+
+        if response.status_code == 200:
+            if args.streaming:
+                p = pyaudio.PyAudio()
+                audio_format = pyaudio.paInt16  # Assuming 16-bit PCM format
+                stream = p.open(
+                    format=audio_format,
+                    channels=args.channels,
+                    rate=args.rate,
+                    output=True,
+                )
+
+                wf = wave.open(f"{args.output}.wav", "wb")
+                wf.setnchannels(args.channels)
+                wf.setsampwidth(p.get_sample_size(audio_format))
+                wf.setframerate(args.rate)
+
+                stream_stopped_flag = False
+
+                try:
+                    for chunk in response.iter_content(chunk_size=1024):
+                        if chunk:
+                            stream.write(chunk)
+                            wf.writeframesraw(chunk)
+                        else:
+                            if not stream_stopped_flag:
+                                stream.stop_stream()
+                                stream_stopped_flag = True
+                finally:
+                    stream.close()
+                    p.terminate()
+                    wf.close()
+            else:
+                audio_content = response.content
+                audio_path = f"{args.output}.{args.format}"
+                with open(audio_path, "wb") as audio_file:
+                    audio_file.write(audio_content)
+
+                audio = AudioSegment.from_file(audio_path, format=args.format)
+                if args.play:
+                    play(audio)
+                print(f"Audio has been saved to '{audio_path}'.")
+        else:
+            print(f"Request failed with status code {response.status_code}")
+            print(response.json())

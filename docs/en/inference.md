@@ -72,6 +72,29 @@ python -m tools.api_server \
 
 After that, you can view and test the API at http://127.0.0.1:8080/.
 
+### WebSocket API
+
+For low-latency streaming you can use the WebSocket endpoint at `/v1/tts/ws`:
+
+```python
+import asyncio
+import websockets
+from fish_speech.utils.schema import ServeTTSRequest
+
+
+async def main():
+    async with websockets.connect("ws://127.0.0.1:8080/v1/tts/ws") as ws:
+        await ws.send(ServeTTSRequest(text="hello").model_dump_json())
+        async for chunk in ws:
+            ...  # handle raw WAV bytes
+
+
+asyncio.run(main())
+```
+
+The server expects the first message to be a JSON encoded `ServeTTSRequest`.  It
+streams back chunks of WAV data via `ws.send_bytes`.
+
 ## GUI Inference 
 [Download client](https://github.com/AnyaCoder/fish-speech-gui/releases)
 
