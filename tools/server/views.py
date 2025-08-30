@@ -140,7 +140,7 @@ async def tts(req: Annotated[ServeTTSRequest, Body(exclusive=True)]):
         )
 
 
-@routes.ws("/v1/tts/ws")
+@routes.websocket("/v1/tts/ws")
 async def tts_ws(ws: WebSocket):
     await ws.accept()
     try:
@@ -148,7 +148,7 @@ async def tts_ws(ws: WebSocket):
         req = ServeTTSRequest.model_validate_json(data)
         req.streaming = True
 
-        app_state = request.app.state
+        app_state = ws.app.state
         model_manager: ModelManager = app_state.model_manager
         engine = model_manager.tts_inference_engine
 
